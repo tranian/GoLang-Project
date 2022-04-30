@@ -1,7 +1,8 @@
 package main
 
 import (
-	// "io/ioutil"
+	"io/ioutil"
+	"encoding/json"
 	"net/http"
 	"html/template"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"database/sql"
 	"github.com/go-sql-driver/mysql"
+	"os"
 )
 
 var db *sql.DB
@@ -20,6 +22,13 @@ type Page struct {
 	PageID int
 }
 
+
+type Configuration struct {
+	Dbuser string `json:"dbuser"`
+	Dbname string `json:"dbname"`
+	Dbpass string `json:"dbpass"`
+	Dbaddr string `json:"dbaddr"`
+}
 
 var templates = template.Must(template.ParseFiles("edit.html", "view.html"))
 var validPath = regexp.MustCompile("^/(edit|save|view)/([a-zA-Z0-9]+)$")
@@ -35,7 +44,6 @@ func (p *Page) save() (error) {
 	}
 	return err
 }
-
 
 func loadPage(title string) (*Page, error) {
 	var p Page
@@ -98,15 +106,27 @@ func editHandler(w http.ResponseWriter, r *http.Request, title string) {
 }
 
 func main() {
+
+	config_file, _ := os.Open("config.json")
+	defer config_file.Close()
+	config_data, err := ioutil.ReadAll(config_file)
+	if err != nil {
+		fmt.Printf("Failed to read config.json, error: %s", err)
+	}
+	config := Configuration{}
+	err = json.Unmarshal(config_data, &config)
+	if err != nil {
+		fmt.Printf("error: %s\n", err)
+	}
+
 	cfg := mysql.Config{
-		User:		"lunix",
-		Passwd:		"",
-		Net:		"tcp",
-		Addr:		"127.0.0.1:3306",
-		DBName:		"gowiki",
+		User: config.Dbuser,
+		Passwd: config.Dbpass,
+		Net: "tcp",
+		Addr: config.Dbaddr,
+		DBName: config.Dbname,
 		AllowNativePasswords: true,
 	}
-	var err error
 	db, err = sql.Open("mysql", cfg.FormatDSN())
 	if err != nil {
 		log.Fatal(err)
