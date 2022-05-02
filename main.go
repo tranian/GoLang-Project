@@ -15,14 +15,15 @@ import (
 
 var db *sql.DB
 
-//Page describes how we present an article
+// Page describes how we present an article
 type Page struct {
 	Title string
 	Body []byte
 	PageID int
+	Links []string
 }
 
-
+// Configuration for setting up database
 type Configuration struct {
 	Dbuser string `json:"dbuser"`
 	Dbname string `json:"dbname"`
@@ -30,10 +31,16 @@ type Configuration struct {
 	Dbaddr string `json:"dbaddr"`
 }
 
-var templates = template.Must(template.ParseFiles("edit.html", "view.html"))
-var validPath = regexp.MustCompile("^/(edit|save|view)/([a-zA-Z0-9]+)$")
+var templates = template.Must(template.ParseFiles("edit.html", "view.html", "search.html"))
+var validPath = regexp.MustCompile("^/(edit|save|view|search)/([a-zA-Z0-9]+)$")
 
 func (p *Page) save() (error) {
+	/*
+	Saves a Page by inserting it into database
+
+	Args:
+		p (*Page): page to save
+	*/
 	row := db.QueryRow("SELECT * FROM pages WHERE title = ?", p.Title)
 	var err error
 	n := *p
@@ -45,7 +52,42 @@ func (p *Page) save() (error) {
 	return err
 }
 
+func search(text string) ([]Page, error) {
+	/*
+	Searches for a keyword in the database
+
+	Args:
+		text (string): takes a text to search in the page body and title
+	*/
+	search_text := "%" + text + "%"
+	var list_pages []Page
+	rows, err := db.Query(`SELECT * FROM pages WHERE title LIKE ? OR body LIKE ?`, search_text, search_text)
+	if err != nil {
+		return  nil, fmt.Errorf("Error: name: %q: %v", search_text, err)
+	}
+	defer rows.Close()
+	// loop through rows
+	for rows.Next() {
+		var p Page
+		if err := rows.Scan(&p.PageID, &p.Title, &p.Body); err != nil {
+			return nil, fmt.Errorf("Error: name: %q: %v", search_text, err)
+		}
+		list_pages = append(list_pages, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("Error: %q: %v", search_text, err)
+	}
+	return list_pages, nil
+}
+
+
 func loadPage(title string) (*Page, error) {
+	/*
+	Loads a page
+
+	Args:
+		title (string): takes in a title for requesting the page
+	*/
 	var p Page
 
 	row := db.QueryRow("SELECT * FROM pages WHERE title = ?", title)
@@ -59,13 +101,28 @@ func loadPage(title string) (*Page, error) {
 }
 
 func renderTemplate(w http.ResponseWriter, templateName string, p *Page) {
+	/*
+	Renders the html template
+
+	Args:
+		w (http.ResponseWriter): interface used by HTTP to construct response
+		templateName (string): name of the html template
+		p (*Page): Takes in a page
+	*/
 	err := templates.ExecuteTemplate(w, templateName + ".html", p)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
+
 func makeHandler(fn func (http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
+	/*
+	Creates a handler
+
+	Args:
+		fn (func): takes in a handler function
+	*/
 	return func(w http.ResponseWriter, r *http.Request) {
 		m := validPath.FindStringSubmatch(r.URL.Path)
 		if m == nil {
@@ -77,6 +134,14 @@ func makeHandler(fn func (http.ResponseWriter, *http.Request, string)) http.Hand
 }
 
 func viewHandler(w http.ResponseWriter, r *http.Request, title string) {
+	/*
+	A handler for viewing pages, and managing nonexistent pages
+
+	Args:
+		w (http.ResponseWriter): interface used by HTTP to construct response
+		r (*http.Request): HTTP request received by server or sent by client
+		title (string): takes in a title for requesting the page
+	*/
 	p, err := loadPage(title)
 	if err != nil {
 		p = &Page{Title:title}
@@ -88,6 +153,14 @@ func viewHandler(w http.ResponseWriter, r *http.Request, title string) {
 }
 
 func saveHandler(w http.ResponseWriter, r *http.Request, title string) {
+	/*
+	A handler for saving pages
+	
+	Args:
+		w (http.ResponseWriter): interface used by HTTP to construct response
+		r (*http.Request): HTTP request received by server or sent by client
+		title (string): takes in a title for requesting the page
+	*/
 	body := r.FormValue("body")
 	p := &Page{Title: title, Body: []byte(body)}
 	err := p.save()
@@ -98,6 +171,14 @@ func saveHandler(w http.ResponseWriter, r *http.Request, title string) {
 }
 
 func editHandler(w http.ResponseWriter, r *http.Request, title string) {
+	/*
+	A handler for editting pages
+
+	Args:
+		w (http.ResponseWriter): interface used by HTTP to construct response
+		r (*http.Request): HTTP request received by server or sent by client
+		title (string): takes in a title for requesting the page
+	*/
 	p, err := loadPage(title)
 	if err != nil {
 		p = &Page{Title: title}
@@ -105,8 +186,34 @@ func editHandler(w http.ResponseWriter, r *http.Request, title string) {
 	renderTemplate(w, "edit", p)
 }
 
-func main() {
+func searchHandler(w http.ResponseWriter, r *http.Request, title string) {
+	/*
+	A handler for saving pages
 
+	Args:
+		w (http.ResponseWriter): interface used by HTTP to construct response
+		r (*http.Request): HTTP request received by server or sent by client
+		title (string): takes in a title for requesting the page
+	*/
+	search_text := r.FormValue("body")
+	results, err := search(search_text)
+	if err != nil {
+		fmt.Printf("No results found")
+	}
+	var list_title []string
+	var list_body [][]byte
+	for _, pages := range results {
+		list_title = append(list_title, pages.Title)
+		list_body = append(list_body, pages.Body)
+	}
+	p := &Page{Title: "search", Links: list_title}
+	renderTemplate(w, "search", p)
+}
+
+func main() {
+	/*
+	main function for running the gowiki application
+	*/
 	config_file, _ := os.Open("config.json")
 	defer config_file.Close()
 	config_data, err := ioutil.ReadAll(config_file)
@@ -141,5 +248,6 @@ func main() {
 	http.HandleFunc("/view/", makeHandler(viewHandler))
 	http.HandleFunc("/edit/", makeHandler(editHandler))
 	http.HandleFunc("/save/", makeHandler(saveHandler))
+	http.HandleFunc("/search/",makeHandler(searchHandler))
 	log.Fatal(http.ListenAndServe(":3000", nil))
 }
